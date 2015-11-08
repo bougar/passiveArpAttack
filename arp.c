@@ -12,8 +12,11 @@
 #include <netpacket/packet.h>
 #include <linux/filter.h> // CHANGE: include lsf
 #include <net/ethernet.h>
-#define DEBUG 1
 
+#define INTERFACE "eth0"
+#define DEBUG 1
+#define ETH_HDR_LEN 14
+#define BUFF_SIZE 2048
 #define ETHER_TYPE_FOR_ARP 0x0806
 #define HW_TYPE_FOR_ETHER 0x0001
 #define OP_CODE_FOR_ARP_REQ 0x0001
@@ -112,8 +115,7 @@ void debug(ARP_PKT pkt){
     printf("ARP DONE =====================\n");
 }
 
-#define ETH_HDR_LEN 14
-#define BUFF_SIZE 2048
+
 
 //arp filter. Dont know exactly what it do,but IT WORKS!!!!
 struct sock_filter arpfilter[] = {
@@ -140,12 +142,13 @@ int main(void)
 		perror("socket(): ");
 		exit(-1);
 	}
+	
 	//Preparing the filter
-        if ((filter = malloc(sizeof(arpfilter))) == NULL) {
-      	     	perror("malloc");
-        	close(sock);
-        	exit(1);
-   	 }	
+	if ((filter = malloc(sizeof(arpfilter))) == NULL) {
+		perror("malloc");
+		close(sock);
+		exit(-1);
+	}	
 	memcpy(filter, &arpfilter, sizeof(arpfilter));
 	fprog.filter=filter;
 	fprog.len=sizeof(arpfilter)/sizeof(struct sock_filter);
@@ -153,9 +156,9 @@ int main(void)
 	//Add socket filter
 	if ( setsockopt(sock,SOL_SOCKET, SO_ATTACH_FILTER, &fprog, sizeof(fprog)) )
 	{
-		perror("Setsocketopt ");
+		perror("Setsocketopt");
 		close(sock);
-		exit(1);
+		exit(-1);
 	}
 	//Starting sniffing all arp packets
 	buffer = malloc(BUFF_SIZE);
@@ -164,7 +167,7 @@ int main(void)
 		printf("Starting capturing arp...\n");
 		if ( ( recvd_size = recv ( sock,buffer, BUFF_SIZE, 0)) < 0)
 		{
-			perror("recv(): ");
+			perror("recv()");
 			free(buffer);
 			close(sock);
 			exit(-1);
@@ -173,16 +176,16 @@ int main(void)
 		//We have arp packet but we might add ethernet header
 		if((size_t)recvd_size < (sizeof(struct ethernet) + sizeof(struct arp)))
         	{
-            		printf("Short packet. Packet len: %ld\n", recvd_size);
-            		continue;
+            		printf("Short packet. Packet len: %ld, Check the filter\n", recvd_size);
+            		break;
        		}	
 		//Adding the ethernet size
 		arp_hdr = (struct arp *)(buffer+ETH_HDR_LEN);
+		//Next func process the packet
 		test_func(arp_hdr);	
 	}
 	free(buffer);
 	close(sock);
-
 }	
 
 test_func(struct arp *arp_hdr)
@@ -211,7 +214,7 @@ test_func(struct arp *arp_hdr)
 	} 
 	
 	/*Get Mac hw*/
-	memcpy(ifr.ifr_name, "eth0", IF_NAMESIZE);
+	memcpy(ifr.ifr_name, INTERFACE , IF_NAMESIZE);
 	retVal = ioctl(if_fd, SIOCGIFHWADDR, &ifr, sizeof(ifr));
 	if( retVal < 0 )
 	{
