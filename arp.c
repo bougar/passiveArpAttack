@@ -12,6 +12,7 @@
 #include <netpacket/packet.h>
 #include <linux/filter.h> // CHANGE: include lsf
 #include <net/ethernet.h>
+#include <pcap/pcap.h>
 
 #define INTERFACE "eth0"
 #define DEBUG 1
@@ -129,83 +130,21 @@ struct sock_filter arpfilter[] = {
 
 int main(void)
 {
-	int sock;
+	int sniff_socket;
 	void * buffer;
 	ssize_t recvd_size;
 	struct ethernet *eth_hdr;
 	struct arp *arp_hdr;
 	struct sock_filter *filter;
 	struct sock_fprog fprog;
-	//Starting the socket
-	if ((sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) == -1)
-	{
-		perror("socket(): ");
-		exit(-1);
-	}
-	
-	//Preparing the filter
-	if ((filter = malloc(sizeof(arpfilter))) == NULL) {
-		perror("malloc");
-		close(sock);
-		exit(-1);
-	}	
-	memcpy(filter, &arpfilter, sizeof(arpfilter));
-	fprog.filter=filter;
-	fprog.len=sizeof(arpfilter)/sizeof(struct sock_filter);
-	
-	//Add socket filter
-	if ( setsockopt(sock,SOL_SOCKET, SO_ATTACH_FILTER, &fprog, sizeof(fprog)) )
-	{
-		perror("Setsocketopt");
-		close(sock);
-		exit(-1);
-	}
-	//Starting sniffing all arp packets
-	buffer = malloc(BUFF_SIZE);
-	while(1)
-	{
-		printf("Starting capturing arp...\n");
-		if ( ( recvd_size = recv ( sock,buffer, BUFF_SIZE, 0)) < 0)
-		{
-			perror("recv()");
-			free(buffer);
-			close(sock);
-			exit(-1);
-		}
-
-		//We have arp packet but we might add ethernet header
-		if((size_t)recvd_size < (sizeof(struct ethernet) + sizeof(struct arp)))
-        	{
-            		printf("Short packet. Packet len: %ld, Check the filter\n", recvd_size);
-            		break;
-       		}	
-		//Adding the ethernet size
-		arp_hdr = (struct arp *)(buffer+ETH_HDR_LEN);
-		//Next func process the packet
-		test_func(arp_hdr);	
-	}
-	free(buffer);
-	close(sock);
-}	
-
-test_func(struct arp *arp_hdr)
-{
 	ARP_PKT pkt;
-	int sock;
+	int if_fd;
 	struct ifreq ifr;
 	struct sockaddr_ll sa;
-	int if_fd;
 	int retVal;
 	int i;
-
-	// Padding
-	memset(pkt.padding, 0 , 18 * sizeof(char)); 
-	
-	if ((sock = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP)))==-1){
-		perror("Error Creating ARP socket");
-		exit(-1);
-	}
-	ifr.ifr_ifindex=0;
+	int sock;
+	/*********************Initialice arp packet*********************************/
 	if_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if( if_fd < 0 )
 	{
@@ -223,6 +162,7 @@ test_func(struct arp *arp_hdr)
 		exit(-1);
 	}
 	
+	
 	//Formulate arp reply
 	// Ethernet Header
 	memset(pkt.src_mac+0, (ifr.ifr_hwaddr.sa_data[0]&0xFF), (sizeof(byte1)));
@@ -231,32 +171,20 @@ test_func(struct arp *arp_hdr)
 	memset(pkt.src_mac+3, (ifr.ifr_hwaddr.sa_data[3]&0xFF), (sizeof(byte1)));
 	memset(pkt.src_mac+4, (ifr.ifr_hwaddr.sa_data[4]&0xFF), (sizeof(byte1)));
 	memset(pkt.src_mac+5, (ifr.ifr_hwaddr.sa_data[5]&0xFF), (sizeof(byte1)));
-	
-	memset(pkt.dest_mac+0, (arp_hdr->sender_ha[0]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+1, (arp_hdr->sender_ha[1]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+2, (arp_hdr->sender_ha[2]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+3, (arp_hdr->sender_ha[3]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+4, (arp_hdr->sender_ha[4]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+5, (arp_hdr->sender_ha[5]&0xFF), (sizeof(byte1)));
-	
 	pkt.ether_type = htons(ETHER_TYPE_FOR_ARP);
-	// ARP Header
+	
+	//Arp construction
 	pkt.hw_type = htons(HW_TYPE_FOR_ETHER);
 	pkt.proto_type = htons(PROTO_TYPE_FOR_IP);
 	pkt.hw_size = HW_LEN_FOR_ETHER;
 	pkt.proto_size = HW_LEN_FOR_IP;
 	pkt.arp_opcode = htons(0X0002);
 	memcpy(pkt.sender_mac, pkt.src_mac, (6 * sizeof(byte1)));
-	*((byte4 *) &(pkt.sender_ip)) = *((byte4 *) &(arp_hdr->target_pa));
-	*((byte4 *) &(pkt.target_ip)) = *((byte4 *) &(arp_hdr->sender_pa));
-
 	
-	for (i = 0;i<6;i++)
-	{
-		pkt.sender_mac[i]=pkt.src_mac[i];
-		pkt.target_mac[i]=pkt.dest_mac[i];
-	}
+	// Padding
+	memset(pkt.padding, 0 , 18 * sizeof(char));
 	
+	//Device information
 	retVal = ioctl(if_fd, SIOCGIFADDR, &ifr, sizeof(ifr));
 	if( retVal < 0 )
 	{
@@ -273,12 +201,90 @@ test_func(struct arp *arp_hdr)
 	sa.sll_protocol = htons(ETH_P_ARP);
 	sa.sll_halen = 0;
 	
- 	if ( sendto( sock, &pkt,sizeof(pkt), 0, (struct sockaddr *)&sa,sizeof(sa) ) < 0 )
- 	{
-   		perror("sendto");
-    	exit(-1);
-  	}
-  	
-	if (DEBUG)
-		debug(pkt);
-}
+	/********************Finish the initialation***************************/
+	
+	//Starting the socket
+	if ((sniff_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) == -1)
+	{
+		perror("socket(): ");
+		exit(-1);
+	}
+	
+	//Preparing the filter
+	if ((filter = malloc(sizeof(arpfilter))) == NULL) {
+		perror("malloc");
+		close(sock);
+		exit(-1);
+	}	
+	memcpy(filter, &arpfilter, sizeof(arpfilter));
+	fprog.filter=filter;
+	fprog.len=sizeof(arpfilter)/sizeof(struct sock_filter);
+	
+	//Add socket filter
+	if ( setsockopt(sniff_socket,SOL_SOCKET, SO_ATTACH_FILTER, &fprog, sizeof(fprog)) )
+	{
+		perror("Setsocketopt");
+		close(sock);
+		exit(-1);
+	}
+	//Starting sniffing all arp packets
+	buffer = malloc(BUFF_SIZE);
+	while(1)
+	{
+		printf("Starting capturing arp...\n");
+		if ( ( recvd_size = recv ( sniff_socket,buffer, BUFF_SIZE, 0)) < 0)
+		{
+			perror("recv()");
+			free(buffer);
+			close(sock);
+			exit(-1);
+		}
+
+		//We have arp packet but we might add ethernet header
+		if((size_t)recvd_size < (sizeof(struct ethernet) + sizeof(struct arp)))
+        	{
+            		printf("Short packet. Packet len: %ld, Check the filter\n", recvd_size);
+            		break;
+       		}	
+		//Adding the ethernet size
+		arp_hdr = (struct arp *)(buffer+ETH_HDR_LEN);
+		//Next func process the packet
+		
+		/******************Process the packet**************/
+		if ((sock = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP)))==-1){
+			perror("Error Creating ARP socket");
+			exit(-1);
+		}
+	
+		memset(pkt.dest_mac+0, (arp_hdr->sender_ha[0]&0xFF), (sizeof(byte1)));
+		memset(pkt.dest_mac+1, (arp_hdr->sender_ha[1]&0xFF), (sizeof(byte1)));
+		memset(pkt.dest_mac+2, (arp_hdr->sender_ha[2]&0xFF), (sizeof(byte1)));
+		memset(pkt.dest_mac+3, (arp_hdr->sender_ha[3]&0xFF), (sizeof(byte1)));
+		memset(pkt.dest_mac+4, (arp_hdr->sender_ha[4]&0xFF), (sizeof(byte1)));
+		memset(pkt.dest_mac+5, (arp_hdr->sender_ha[5]&0xFF), (sizeof(byte1)));
+	
+		*((byte4 *) &(pkt.sender_ip)) = *((byte4 *) &(arp_hdr->target_pa));
+		*((byte4 *) &(pkt.target_ip)) = *((byte4 *) &(arp_hdr->sender_pa));
+
+	
+		for (i = 0;i<6;i++)
+		{
+			pkt.target_mac[i]=pkt.dest_mac[i];
+		}
+	
+	 	if ( sendto( sock, &pkt,sizeof(pkt), 0, (struct sockaddr *)&sa,sizeof(sa) ) < 0 )
+	 	{
+	   		perror("sendto");
+			exit(-1);
+	  	}
+	  	
+		if (DEBUG)
+			debug(pkt);
+		
+		/*************************Finish packet procesing****************************/
+
+	}
+	free(buffer);
+	close(sock);
+}	
+
