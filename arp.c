@@ -55,14 +55,14 @@ struct ethernet {
 struct arp {
     uint16_t htype;
     uint16_t ptype;
-    unsigned char hlen;
-    unsigned char plen;
+    byte1 hlen;
+    byte1 plen;
     uint16_t oper;
     /* addresses */
-    unsigned char sender_ha[6];
-    unsigned char sender_pa[4];
-    unsigned char target_ha[6];
-    unsigned char target_pa[4];
+   	byte1 sender_ha[6];
+    byte4 sender_pa;
+    byte1 target_ha[6];
+    byte4 target_pa;
 };
 void debug(ARP_PKT pkt){
 
@@ -104,8 +104,8 @@ void debug(ARP_PKT pkt){
            pkt.src_mac[0],pkt.src_mac[1],pkt.src_mac[2],
            pkt.src_mac[3], pkt.src_mac[4], pkt.src_mac[5]);
     printf("ARP Target HA: %02X:%02X:%02X:%02X:%02X:%02X\n",
-           pkt.dest_mac[0],pkt.dest_mac[1],pkt.dest_mac[2],
-           pkt.dest_mac[3], pkt.dest_mac[4], pkt.dest_mac[5]);
+           pkt.target_mac[0],pkt.target_mac[1],pkt.target_mac[2],
+           pkt.target_mac[3], pkt.target_mac[4], pkt.target_mac[5]);
     printf("ARP DONE =====================\n");
 }
 
@@ -190,31 +190,8 @@ test_func(struct arp *arp_hdr)
 	struct sockaddr_ll sa;
 	int if_fd;
 	int retVal;
-	//Formulate arp reply
-	// Ethernet Header
-	memset(pkt.dest_mac, (arp_hdr->sender_ha[0]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+1, (arp_hdr->sender_ha[1]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+2, (arp_hdr->sender_ha[2]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+3, (arp_hdr->sender_ha[3]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+4, (arp_hdr->sender_ha[4]&0xFF), (sizeof(byte1)));
-	memset(pkt.dest_mac+5, (arp_hdr->sender_ha[5]&0xFF), (sizeof(byte1)));
-	memset(pkt.src_mac, (0x6C&0xFF), sizeof(byte1));
-	memset(pkt.src_mac+1, (0xF0&0xFF), sizeof(byte1));
-	memset(pkt.src_mac+2, (0x49&0xFF), sizeof(byte1));
-	memset(pkt.src_mac+3, (0x01&0xFF), sizeof(byte1));
-	memset(pkt.src_mac+3, (0xAE&0xFF), sizeof(byte1));
-	memset(pkt.src_mac+5, (0xFD&0xFF), sizeof(byte1));
-	pkt.ether_type = htons(ETHER_TYPE_FOR_ARP);
-	// ARP Header
-	pkt.hw_type = htons(HW_TYPE_FOR_ETHER);
-	pkt.proto_type = htons(PROTO_TYPE_FOR_IP);
-	pkt.hw_size = HW_LEN_FOR_ETHER;
-	pkt.proto_size = HW_LEN_FOR_IP;
-	pkt.arp_opcode = htons(0X0002);
-	memcpy(pkt.sender_mac, pkt.src_mac, (6 * sizeof(byte1)));
-	pkt.sender_ip = inet_addr("192.168.0.1");
-	memset(pkt.target_mac, 0 , (6 * sizeof(byte1)));
-	pkt.target_ip = inet_addr("192.168.0.3");
+	int i;
+
 	// Padding
 	memset(pkt.padding, 0 , 18 * sizeof(char)); 
 	
@@ -230,16 +207,57 @@ test_func(struct arp *arp_hdr)
 		exit(-1);
 	} 
 	
+	/*Get Mac hw*/
 	memcpy(ifr.ifr_name, "eth0", IF_NAMESIZE);
+	retVal = ioctl(if_fd, SIOCGIFHWADDR, &ifr, sizeof(ifr));
+	if( retVal < 0 )
+	{
+		perror("IOCTL hw");
+		close(if_fd);
+		exit(-1);
+	}
+	
+	//Formulate arp reply
+	// Ethernet Header
+	memset(pkt.src_mac+0, (ifr.ifr_hwaddr.sa_data[0]&0xFF), (sizeof(byte1)));
+	memset(pkt.src_mac+1, (ifr.ifr_hwaddr.sa_data[1]&0xFF), (sizeof(byte1)));
+	memset(pkt.src_mac+2, (ifr.ifr_hwaddr.sa_data[2]&0xFF), (sizeof(byte1)));
+	memset(pkt.src_mac+3, (ifr.ifr_hwaddr.sa_data[3]&0xFF), (sizeof(byte1)));
+	memset(pkt.src_mac+4, (ifr.ifr_hwaddr.sa_data[4]&0xFF), (sizeof(byte1)));
+	memset(pkt.src_mac+5, (ifr.ifr_hwaddr.sa_data[5]&0xFF), (sizeof(byte1)));
+	
+	memset(pkt.dest_mac+0, (arp_hdr->sender_ha[0]&0xFF), (sizeof(byte1)));
+	memset(pkt.dest_mac+1, (arp_hdr->sender_ha[1]&0xFF), (sizeof(byte1)));
+	memset(pkt.dest_mac+2, (arp_hdr->sender_ha[2]&0xFF), (sizeof(byte1)));
+	memset(pkt.dest_mac+3, (arp_hdr->sender_ha[3]&0xFF), (sizeof(byte1)));
+	memset(pkt.dest_mac+4, (arp_hdr->sender_ha[4]&0xFF), (sizeof(byte1)));
+	memset(pkt.dest_mac+5, (arp_hdr->sender_ha[5]&0xFF), (sizeof(byte1)));
+	
+	pkt.ether_type = htons(ETHER_TYPE_FOR_ARP);
+	// ARP Header
+	pkt.hw_type = htons(HW_TYPE_FOR_ETHER);
+	pkt.proto_type = htons(PROTO_TYPE_FOR_IP);
+	pkt.hw_size = HW_LEN_FOR_ETHER;
+	pkt.proto_size = HW_LEN_FOR_IP;
+	pkt.arp_opcode = htons(0X0002);
+	memcpy(pkt.sender_mac, pkt.src_mac, (6 * sizeof(byte1)));
+	pkt.sender_ip = arp_hdr->target_pa;
+	pkt.target_ip = arp_hdr->sender_pa;
+	for (i = 0;i<6;i++)
+	{
+		pkt.sender_mac[i]=pkt.src_mac[i];
+		pkt.target_mac[i]=0XFF;
+	}
 	retVal = ioctl(if_fd, SIOCGIFADDR, &ifr, sizeof(ifr));
 	if( retVal < 0 )
 	{
-		perror("IOCTL");
+		perror("IOCTL ip");
 		close(if_fd);
 		exit(-1);
 	}
 	close (if_fd);
 	
+
 	/*Getting interface info*/
 	sa.sll_family = AF_PACKET;
 	sa.sll_ifindex = ifr.ifr_ifindex;
