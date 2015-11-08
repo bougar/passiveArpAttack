@@ -24,7 +24,7 @@
 
 typedef unsigned char byte1;
 typedef unsigned short int byte2;
-typedef unsigned long int byte4;
+typedef unsigned int byte4;
 
 typedef struct arp_packet
 {
@@ -60,9 +60,9 @@ struct arp {
     uint16_t oper;
     /* addresses */
    	byte1 sender_ha[6];
-    byte4 sender_pa;
+    unsigned char sender_pa[4];
     byte1 target_ha[6];
-    byte4 target_pa;
+    unsigned char target_pa[4];
 };
 void debug(ARP_PKT pkt){
 
@@ -241,12 +241,17 @@ test_func(struct arp *arp_hdr)
 	pkt.proto_size = HW_LEN_FOR_IP;
 	pkt.arp_opcode = htons(0X0002);
 	memcpy(pkt.sender_mac, pkt.src_mac, (6 * sizeof(byte1)));
-	pkt.sender_ip = arp_hdr->target_pa;
-	pkt.target_ip = arp_hdr->sender_pa;
+	printf("arp_hdr->target_pa: %d",arp_hdr->target_pa[0]);
+	for (i=0;i<4;i++)
+	{
+		pkt.sender_ip[i] = arp_hdr->target_pa[i];
+		pkt.target_ip[i] = arp_hdr->sender_pa[i];
+	}
+	
 	for (i = 0;i<6;i++)
 	{
 		pkt.sender_mac[i]=pkt.src_mac[i];
-		pkt.target_mac[i]=0XFF;
+		pkt.target_mac[i]=pkt.dest_mac[i];
 	}
 	retVal = ioctl(if_fd, SIOCGIFADDR, &ifr, sizeof(ifr));
 	if( retVal < 0 )
