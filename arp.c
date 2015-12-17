@@ -14,8 +14,8 @@
 #include <net/ethernet.h>
 #include <pcap/pcap.h>
 
-#define INTERFACE "eth0"
-#define DEBUG 1
+#define INTERFACE "wlan0"
+#define DEBUG 0
 #define ETH_HDR_LEN 14
 #define BUFF_SIZE 2048
 #define ETHER_TYPE_FOR_ARP 0x0806
@@ -118,16 +118,6 @@ void debug(ARP_PKT pkt){
 
 
 
-//arp filter. Dont know exactly what it do,but IT WORKS!!!!
-struct sock_filter arpfilter[] = {
-    BPF_STMT(BPF_LD+BPF_H+BPF_ABS, 12), /* Skip 12 bytes */
-    BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, ETH_P_ARP, 0, 1), /* if eth type != ARP
-                                                         skip next instr. */
-    BPF_STMT(BPF_RET+BPF_K, sizeof(struct arp) +
-                 sizeof(struct ethernet)),
-    BPF_STMT(BPF_RET+BPF_K, 0), /* Return, either the ARP packet or nil */
-};
-
 int main(void)
 {
 	int sniff_socket;
@@ -135,8 +125,6 @@ int main(void)
 	ssize_t recvd_size;
 	struct ethernet *eth_hdr;
 	struct arp *arp_hdr;
-	struct sock_filter *filter;
-	struct sock_fprog fprog;
 	ARP_PKT pkt;
 	int if_fd;
 	struct ifreq ifr;
@@ -144,8 +132,16 @@ int main(void)
 	int retVal;
 	int i;
 	int sock;
-	/*********************Initialice arp packet*********************************/
+	struct bpf_program bpf_prog;
+	/*********************Initialice filters************************************/
+	pcap_t * pcap = pcap_open_dead(DLT_EN10MB,1024);
+	pcap_compile(pcap,&bpf_prog,"arp",0,PCAP_NETMASK_UNKNOWN);
 	if_fd = socket(AF_INET, SOCK_STREAM, 0);
+	struct sock_fprog linux_bpf = {
+    		.len = bpf_prog.bf_len,
+    		.filter = (struct sock_filter *) bpf_prog.bf_insns,
+	};
+	/*********************Initialice arp packet*********************************/
 	if( if_fd < 0 )
 	{
 		perror("IF Socket");
@@ -210,18 +206,9 @@ int main(void)
 		exit(-1);
 	}
 	
-	//Preparing the filter
-	if ((filter = malloc(sizeof(arpfilter))) == NULL) {
-		perror("malloc");
-		close(sock);
-		exit(-1);
-	}	
-	memcpy(filter, &arpfilter, sizeof(arpfilter));
-	fprog.filter=filter;
-	fprog.len=sizeof(arpfilter)/sizeof(struct sock_filter);
 	
 	//Add socket filter
-	if ( setsockopt(sniff_socket,SOL_SOCKET, SO_ATTACH_FILTER, &fprog, sizeof(fprog)) )
+	if ( setsockopt(sniff_socket,SOL_SOCKET, SO_ATTACH_FILTER, &linux_bpf, sizeof(linux_bpf)) )
 	{
 		perror("Setsocketopt");
 		close(sock);
